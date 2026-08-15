@@ -4,11 +4,11 @@
   "version": "0.0.1",
   "type": "module",
   "scripts": {
-    "dev": "vite --mode development --host 127.0.0.1 --port 5173",
-    "test": "vite --mode test --host 127.0.0.1 --port 5174",
+    "dev": "vite --mode development --host 127.0.0.1 --port 8081",
+    "test": "vite --mode test --host 127.0.0.1 --port 8081",
     "build": "vite build --mode production",
-    "preview": "vite preview --host 127.0.0.1 --port 4173",
-    "prod": "npm run build && vite preview --host 127.0.0.1 --port 4173"
+    "preview": "vite preview --host 127.0.0.1 --port 8081",
+    "prod": "npm run build && vite preview --host 127.0.0.1 --port 8081"
   },
   "dependencies": {
     "vue": "^3.5.13"
