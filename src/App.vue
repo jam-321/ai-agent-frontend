@@ -1,5 +1,6 @@
 <script setup>
 import { computed, onMounted, onUnmounted, ref } from 'vue'
+import AdminMonitor from './components/AdminMonitor.vue'
 import { getCurrentUser, login, logout, register } from './api/auth'
 import { ApiError } from './api/http'
 import { deleteConversation, getConversationTurns, getProgress, listConversations, sendMessage } from './api/chat'
@@ -14,6 +15,7 @@ const authError = ref('')
 const authNotice = ref('')
 const authSubmitting = ref(false)
 const logoutSubmitting = ref(false)
+const workspaceView = ref('chat')
 
 const conversations = ref([])
 const activeConversationId = ref(null)
@@ -101,6 +103,7 @@ async function selectConversation(id) {
 }
 
 function newConversation() {
+  workspaceView.value = 'chat'
   stopPolling()
   activeConversationId.value = null
   messages.value = []
@@ -108,6 +111,15 @@ function newConversation() {
   runSteps.value = []
   runError.value = ''
   input.value = ''
+}
+
+function showChat() {
+  workspaceView.value = 'chat'
+}
+
+function showMonitor() {
+  stopPolling()
+  workspaceView.value = 'monitor'
 }
 
 async function handleDeleteConversation(id) {
@@ -195,6 +207,7 @@ async function handleLogout() {
   try { await logout() } finally {
     stopPolling()
     currentUser.value = null
+    workspaceView.value = 'chat'
     conversations.value = []
     messages.value = []
     logoutSubmitting.value = false
@@ -230,8 +243,15 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
 
   <div v-else class="app-shell">
     <aside class="sidebar">
-      <div class="sidebar-head"><div class="brand-mark">AI Agent</div><button class="new-button" @click="newConversation">＋ 新会话</button></div>
-      <div class="conversation-list">
+      <div class="sidebar-head">
+        <div class="brand-mark">AI Agent</div>
+        <nav class="workspace-nav">
+          <button :class="{ active: workspaceView === 'chat' }" @click="showChat">会话</button>
+          <button v-if="currentUser.isAdmin" :class="{ active: workspaceView === 'monitor' }" @click="showMonitor">监控</button>
+        </nav>
+        <button v-if="workspaceView === 'chat'" class="new-button" @click="newConversation">＋ 新会话</button>
+      </div>
+      <div v-if="workspaceView === 'chat'" class="conversation-list">
         <div v-if="conversations.length === 0" class="sidebar-empty">还没有会话</div>
         <div v-for="conversation in conversations" :key="conversation.id" class="conversation-item" :class="{ active: activeConversationId === conversation.id }" @click="selectConversation(conversation.id)">
           <button class="conversation-select">{{ conversation.title || '未命名会话' }}</button>
@@ -242,11 +262,16 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
 
     <section class="workspace">
       <header class="header">
-        <div><h1>{{ activeConversationId ? (conversations.find((item) => item.id === activeConversationId)?.title || '会话') : '新会话' }}</h1><span class="sub">工具调用与过程会显示在消息下方</span></div>
+        <div>
+          <h1>{{ workspaceView === 'monitor' ? '运行监控' : activeConversationId ? (conversations.find((item) => item.id === activeConversationId)?.title || '会话') : '新会话' }}</h1>
+          <span class="sub">{{ workspaceView === 'monitor' ? '管理员' : '工具调用与过程会显示在消息下方' }}</span>
+        </div>
         <div class="account"><span class="username">{{ currentUser.username }}</span><button class="logout-button" :disabled="logoutSubmitting" @click="handleLogout">退出</button></div>
       </header>
 
-      <main class="chat">
+      <AdminMonitor v-if="workspaceView === 'monitor' && currentUser.isAdmin" />
+
+      <main v-else class="chat">
         <div v-if="messages.length === 0 && !runStatus" class="empty"><strong>开始和 Agent 对话</strong><span>当前会话的历史和工具过程会自动保存</span></div>
         <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role">
           <div class="bubble">{{ message.content }}</div>
@@ -265,7 +290,7 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
         </section>
       </main>
 
-      <footer class="footer"><input v-model="input" placeholder="输入消息，回车发送" :disabled="loading" @keyup.enter="handleSend" /><button :disabled="loading || !input.trim()" @click="handleSend">发送</button></footer>
+      <footer v-if="workspaceView === 'chat'" class="footer"><input v-model="input" placeholder="输入消息，回车发送" :disabled="loading" @keyup.enter="handleSend" /><button :disabled="loading || !input.trim()" @click="handleSend">发送</button></footer>
     </section>
   </div>
 </template>
@@ -284,6 +309,9 @@ button, input { font: inherit; } button { cursor: pointer; }
 .auth-form { display: grid; gap: 16px; }.auth-form label { display: grid; gap: 7px; color: #374151; font-size: 14px; }.auth-form input { width: 100%; padding: 11px 12px; border: 1px solid #d1d5db; border-radius: 7px; outline: none; }.auth-form input:focus { border-color: #4f7cff; box-shadow: 0 0 0 3px rgba(79, 124, 255, .12); }
 .primary-button { padding: 11px 16px; border: 0; border-radius: 7px; background: #4f7cff; color: #fff; }.primary-button:disabled, .logout-button:disabled { opacity: .55; cursor: not-allowed; }.error { color: #dc2626; font-size: 13px; line-height: 1.5; }.notice { color: #15803d; font-size: 13px; line-height: 1.5; }
 .app-shell { display: flex; height: 100%; }.sidebar { width: 260px; flex: 0 0 260px; background: #202938; color: #dbe3ef; display: flex; flex-direction: column; }.sidebar-head { padding: 22px 18px 16px; border-bottom: 1px solid #344052; }.sidebar .brand-mark { margin-bottom: 18px; color: #92adff; }.new-button { width: 100%; padding: 9px 12px; border: 1px solid #52617a; border-radius: 6px; color: #eef3ff; background: #2c384b; text-align: left; }.new-button:hover { background: #35435a; }.conversation-list { overflow-y: auto; padding: 10px; }.sidebar-empty { padding: 18px 8px; color: #8f9caf; font-size: 13px; }.conversation-item { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; border-radius: 6px; }.conversation-item.active, .conversation-item:hover { background: #34445c; }.conversation-select { flex: 1; min-width: 0; overflow: hidden; padding: 9px 8px; border: 0; color: inherit; background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.delete-button { width: 28px; height: 28px; border: 0; background: transparent; color: #a9b4c5; font-size: 19px; }.delete-button:hover { color: #fff; }
+.workspace-nav { display: flex; gap: 4px; margin-bottom: 12px; }
+.workspace-nav button { flex: 1; padding: 7px 9px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #aeb9ca; }
+.workspace-nav button:hover, .workspace-nav button.active { border-color: #52617a; background: #2c384b; color: #fff; }
 .workspace { display: flex; flex: 1; min-width: 0; flex-direction: column; }.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid #e5e7eb; background: #fff; }.header h1 { font-size: 20px; }.sub { color: #888; font-size: 13px; }.account { display: flex; align-items: center; gap: 12px; min-width: 0; }.username { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }.logout-button { padding: 7px 11px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #4b5563; font-size: 13px; }
 .chat { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 820px) / 2)); display: flex; flex-direction: column; gap: 12px; }.empty { display: grid; gap: 8px; place-items: center; color: #9ca3af; margin: auto; }.empty strong { color: #4b5563; font-size: 18px; }.empty span { font-size: 13px; }.row { display: flex; }.row.user { justify-content: flex-end; }.row.assistant { justify-content: flex-start; }.bubble { max-width: min(78%, 720px); padding: 10px 14px; border-radius: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }.user .bubble { background: #4f7cff; color: #fff; border-bottom-right-radius: 4px; }.assistant .bubble { background: #fff; color: #333; border: 1px solid #e5e7eb; border-bottom-left-radius: 4px; }
 .run-panel { width: min(100%, 720px); padding: 12px 14px; border: 1px solid #dbe2ed; border-radius: 8px; background: #fff; }.run-head, .step-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 13px; font-weight: 600; }.run-status { color: #4f7cff; }.run-complete .run-status { color: #15803d; }.run-error .run-status, .run-error { color: #b91c1c; }.run-placeholder { padding: 12px 0 4px; color: #8b95a5; font-size: 13px; }.step { margin-top: 10px; padding: 10px; border-left: 3px solid #9db4ff; background: #f7f9fc; }.step-success { border-left-color: #57a773; }.step-error { border-left-color: #df6b6b; }.step-head span:last-child { color: #6b7280; font-size: 12px; font-weight: 400; }.step pre, .step-event pre { margin-top: 7px; color: #526071; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.step-events { display: grid; gap: 7px; }.step-event { padding-top: 7px; border-top: 1px solid #e5eaf1; }.step-event span { color: #7c8796; font-size: 11px; }
