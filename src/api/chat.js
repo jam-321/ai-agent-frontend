@@ -1,9 +1,15 @@
 import { request } from './http'
 
-export async function sendMessage(message, conversationId = null) {
+export async function sendMessage(
+  message,
+  conversationId = null,
+  agentKey = null,
+  modelProviderKey = null,
+  modelName = null
+) {
   const data = await request('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ conversationId, message })
+    body: JSON.stringify({ conversationId, message, agentKey, modelProviderKey, modelName })
   })
   return data
 }

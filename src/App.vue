@@ -4,6 +4,8 @@ import AdminMonitor from './components/AdminMonitor.vue'
 import { getCurrentUser, login, logout, register } from './api/auth'
 import { ApiError } from './api/http'
 import { deleteConversation, getConversationTurns, getProgress, listConversations, sendMessage } from './api/chat'
+import { listAgents } from './api/agents'
+import { listModels } from './api/models'
 
 const currentUser = ref(null)
 const initializing = ref(true)
@@ -18,6 +20,10 @@ const logoutSubmitting = ref(false)
 const workspaceView = ref('chat')
 
 const conversations = ref([])
+const agents = ref([])
+const models = ref([])
+const selectedAgentKey = ref('general')
+const selectedModelKey = ref('')
 const activeConversationId = ref(null)
 const messages = ref([])
 const input = ref('')
@@ -26,15 +32,19 @@ const runStatus = ref(null)
 const runTurnId = ref(null)
 const runSteps = ref([])
 const runError = ref('')
+const runSelection = ref(null)
 let pollTimer = null
 let pollVersion = 0
 
 const visibleRunSteps = computed(() => runSteps.value.filter((node) => node.nodeType !== 'LIFECYCLE' && node.nodeType !== 'GENERATE'))
+const selectedModel = computed(() => models.value.find((item) => modelKey(item) === selectedModelKey.value))
 
 onMounted(async () => {
   try {
     currentUser.value = await getCurrentUser()
     await loadConversations()
+    await loadAgents()
+    await loadModels()
   } catch (error) {
     if (!(error instanceof ApiError) || error.status !== 401) authError.value = '无法连接服务器，请确认后端已启动。'
   } finally {
@@ -71,6 +81,8 @@ async function handleAuthSubmit() {
       currentUser.value = await login(username.value.trim(), password.value)
       password.value = ''
       await loadConversations()
+      await loadAgents()
+      await loadModels()
     }
   } catch (error) {
     authError.value = error.message || '请求失败，请稍后重试。'
@@ -84,32 +96,98 @@ async function loadConversations() {
   if (activeConversationId.value && !conversations.value.some((item) => item.id === activeConversationId.value)) activeConversationId.value = null
 }
 
+async function loadAgents() {
+  agents.value = await listAgents()
+  if (!agents.value.some((item) => item.agentKey === selectedAgentKey.value)) {
+    selectedAgentKey.value = agents.value[0]?.agentKey || 'general'
+  }
+}
+
+async function loadModels() {
+  models.value = await listModels()
+  const current = models.value.find((item) => modelKey(item) === selectedModelKey.value && item.available)
+  if (!current) {
+    const defaultAgent = agents.value.find((item) => item.agentKey === selectedAgentKey.value)
+    const preferredKey = defaultAgent
+      ? `${defaultAgent.modelProviderKey}::${defaultAgent.modelName}`
+      : ''
+    const preferred = models.value.find((item) => modelKey(item) === preferredKey && item.available)
+    const fallback = models.value.find((item) => item.available)
+    selectedModelKey.value = modelKey(preferred || fallback)
+  }
+}
+
+function modelKey(model) {
+  return model ? `${model.providerKey}::${model.modelName}` : ''
+}
+
+function selectAgentDefaultModel(agentKey) {
+  const agent = agents.value.find((item) => item.agentKey === agentKey)
+  if (!agent) return
+
+  const defaultModelKey = `${agent.modelProviderKey}::${agent.modelName}`
+  const defaultModel = models.value.find((item) => modelKey(item) === defaultModelKey && item.available)
+  if (defaultModel) selectedModelKey.value = defaultModelKey
+}
+
+function handleAgentSelectionChange() {
+  selectAgentDefaultModel(selectedAgentKey.value)
+}
+
 async function selectConversation(id) {
   stopPolling()
   activeConversationId.value = id
+  const conversation = conversations.value.find((item) => item.id === id)
+  selectedAgentKey.value = conversation?.agentKey || selectedAgentKey.value
+  const conversationModelKey = conversation?.modelProviderKey && conversation?.modelName
+    ? `${conversation.modelProviderKey}::${conversation.modelName}`
+    : ''
+  if (models.value.some((item) => modelKey(item) === conversationModelKey && item.available)) {
+    selectedModelKey.value = conversationModelKey
+  }
   runStatus.value = null
   runTurnId.value = null
   runSteps.value = []
   runError.value = ''
   const turns = await getConversationTurns(id)
-  messages.value = turns.map((turn) => ({ role: turn.type, content: turn.content, turnId: turn.turnId }))
+  messages.value = turns.map((turn) => ({
+    role: turn.type,
+    content: turn.content,
+    turnId: turn.turnId,
+    agentKey: turn.agentKey,
+    modelProviderKey: turn.modelProviderKey,
+    modelName: turn.modelName
+  }))
   const grouped = new Map()
   for (const turn of turns) {
     if (!grouped.has(turn.turnId)) grouped.set(turn.turnId, [])
     grouped.get(turn.turnId).push(turn)
   }
   const pending = [...grouped.entries()].reverse().find(([, items]) => items.some((item) => item.type === 'user') && !items.some((item) => item.type === 'assistant'))
-  if (pending) startPolling(id, pending[0])
+  if (pending) {
+    const pendingUser = pending[1].find((item) => item.type === 'user')
+    runSelection.value = pendingUser ? {
+      agentKey: pendingUser.agentKey,
+      modelProviderKey: pendingUser.modelProviderKey,
+      modelName: pendingUser.modelName
+    } : null
+    startPolling(id, pending[0])
+  }
 }
 
 function newConversation() {
   workspaceView.value = 'chat'
   stopPolling()
   activeConversationId.value = null
+  selectedAgentKey.value = agents.value.some((item) => item.agentKey === 'general')
+    ? 'general'
+    : agents.value[0]?.agentKey || 'general'
+  selectAgentDefaultModel(selectedAgentKey.value)
   messages.value = []
   runStatus.value = null
   runSteps.value = []
   runError.value = ''
+  runSelection.value = null
   input.value = ''
 }
 
@@ -132,14 +210,26 @@ async function handleDeleteConversation(id) {
 async function handleSend() {
   const text = input.value.trim()
   if (!text || loading.value) return
-  messages.value.push({ role: 'user', content: text })
+  const submittedSelection = {
+    agentKey: selectedAgentKey.value,
+    modelProviderKey: selectedModel.value?.providerKey || null,
+    modelName: selectedModel.value?.modelName || null
+  }
+  runSelection.value = submittedSelection
+  messages.value.push({ role: 'user', content: text, ...submittedSelection })
   input.value = ''
   loading.value = true
   runStatus.value = 'REASONING'
   runSteps.value = []
   runError.value = ''
   try {
-    const accepted = await sendMessage(text, activeConversationId.value)
+    const accepted = await sendMessage(
+      text,
+      activeConversationId.value,
+      selectedAgentKey.value,
+      selectedModel.value?.providerKey || null,
+      selectedModel.value?.modelName || null
+    )
     activeConversationId.value = accepted.conversationId
     runTurnId.value = accepted.turnId
     await loadConversations()
@@ -170,7 +260,14 @@ function startPolling(conversationId, turnId) {
       runSteps.value = progress.nodeList || []
       runError.value = progress.errorMessage || ''
       if (progress.turnStatus === 'COMPLETE') {
-        if (progress.finalAnswer && !messages.value.some((item) => item.role === 'assistant' && item.turnId === turnId)) messages.value.push({ role: 'assistant', content: progress.finalAnswer, turnId })
+        if (progress.finalAnswer && !messages.value.some((item) => item.role === 'assistant' && item.turnId === turnId)) {
+          messages.value.push({
+            role: 'assistant',
+            content: progress.finalAnswer,
+            turnId,
+            ...runSelection.value
+          })
+        }
         loading.value = false
         pollTimer = null
         await loadConversations()
@@ -209,6 +306,8 @@ async function handleLogout() {
     currentUser.value = null
     workspaceView.value = 'chat'
     conversations.value = []
+    agents.value = []
+    models.value = []
     messages.value = []
     logoutSubmitting.value = false
   }
@@ -255,6 +354,7 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
         <div v-if="conversations.length === 0" class="sidebar-empty">还没有会话</div>
         <div v-for="conversation in conversations" :key="conversation.id" class="conversation-item" :class="{ active: activeConversationId === conversation.id }" @click="selectConversation(conversation.id)">
           <button class="conversation-select">{{ conversation.title || '未命名会话' }}</button>
+          <span class="conversation-agent">{{ conversation.agentKey }} · {{ conversation.modelName || '默认模型' }}</span>
           <button class="delete-button" title="删除会话" @click.stop="handleDeleteConversation(conversation.id)">×</button>
         </div>
       </div>
@@ -274,7 +374,12 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
       <main v-else class="chat">
         <div v-if="messages.length === 0 && !runStatus" class="empty"><strong>开始和 Agent 对话</strong><span>当前会话的历史和工具过程会自动保存</span></div>
         <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role">
-          <div class="bubble">{{ message.content }}</div>
+          <div class="bubble">
+            <span v-if="message.role === 'assistant' && message.modelName" class="message-model">
+              {{ message.agentKey }} · {{ message.modelProviderKey }} / {{ message.modelName }}
+            </span>
+            {{ message.content }}
+          </div>
         </div>
         <section v-if="runStatus" class="run-panel" :class="`run-${runStatus.toLowerCase()}`">
           <div class="run-head"><span>执行过程</span><span class="run-status">{{ runStatus === 'REASONING' ? '处理中' : runStatus === 'COMPLETE' ? '已完成' : '失败' }}</span></div>
@@ -290,7 +395,22 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
         </section>
       </main>
 
-      <footer v-if="workspaceView === 'chat'" class="footer"><input v-model="input" placeholder="输入消息，回车发送" :disabled="loading" @keyup.enter="handleSend" /><button :disabled="loading || !input.trim()" @click="handleSend">发送</button></footer>
+      <footer v-if="workspaceView === 'chat'" class="footer">
+        <select v-model="selectedAgentKey" class="agent-select footer-agent-select" aria-label="选择 Agent" title="切换后下一条消息生效" @change="handleAgentSelectionChange">
+          <option v-for="agent in agents" :key="agent.agentKey" :value="agent.agentKey">{{ agent.agentKey }}</option>
+        </select>
+        <select v-model="selectedModelKey" class="agent-select footer-model-select" aria-label="选择模型" title="切换后下一条消息生效">
+          <option
+            v-for="model in models"
+            :key="modelKey(model)"
+            :value="modelKey(model)"
+            :disabled="!model.available"
+            :title="model.unavailableReason || ''"
+          >{{ model.providerName }} · {{ model.displayName }}{{ model.available ? '' : '（暂不可用）' }}</option>
+        </select>
+        <input v-model="input" placeholder="输入消息，回车发送" :disabled="loading" @keyup.enter="handleSend" />
+        <button :disabled="loading || !input.trim() || !selectedModel" @click="handleSend">发送</button>
+      </footer>
     </section>
   </div>
 </template>
@@ -314,8 +434,16 @@ button, input { font: inherit; } button { cursor: pointer; }
 .workspace-nav button:hover, .workspace-nav button.active { border-color: #52617a; background: #2c384b; color: #fff; }
 .workspace { display: flex; flex: 1; min-width: 0; flex-direction: column; }.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid #e5e7eb; background: #fff; }.header h1 { font-size: 20px; }.sub { color: #888; font-size: 13px; }.account { display: flex; align-items: center; gap: 12px; min-width: 0; }.username { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }.logout-button { padding: 7px 11px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #4b5563; font-size: 13px; }
 .chat { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 820px) / 2)); display: flex; flex-direction: column; gap: 12px; }.empty { display: grid; gap: 8px; place-items: center; color: #9ca3af; margin: auto; }.empty strong { color: #4b5563; font-size: 18px; }.empty span { font-size: 13px; }.row { display: flex; }.row.user { justify-content: flex-end; }.row.assistant { justify-content: flex-start; }.bubble { max-width: min(78%, 720px); padding: 10px 14px; border-radius: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }.user .bubble { background: #4f7cff; color: #fff; border-bottom-right-radius: 4px; }.assistant .bubble { background: #fff; color: #333; border: 1px solid #e5e7eb; border-bottom-left-radius: 4px; }
+.message-model { display: block; margin-bottom: 5px; color: #7c8796; font-size: 11px; line-height: 1.4; }
 .run-panel { width: min(100%, 720px); padding: 12px 14px; border: 1px solid #dbe2ed; border-radius: 8px; background: #fff; }.run-head, .step-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 13px; font-weight: 600; }.run-status { color: #4f7cff; }.run-complete .run-status { color: #15803d; }.run-error .run-status, .run-error { color: #b91c1c; }.run-placeholder { padding: 12px 0 4px; color: #8b95a5; font-size: 13px; }.step { margin-top: 10px; padding: 10px; border-left: 3px solid #9db4ff; background: #f7f9fc; }.step-success { border-left-color: #57a773; }.step-error { border-left-color: #df6b6b; }.step-head span:last-child { color: #6b7280; font-size: 12px; font-weight: 400; }.step pre, .step-event pre { margin-top: 7px; color: #526071; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.step-events { display: grid; gap: 7px; }.step-event { padding-top: 7px; border-top: 1px solid #e5eaf1; }.step-event span { color: #7c8796; font-size: 11px; }
 .footer { display: flex; gap: 10px; padding: 14px max(20px, calc((100% - 820px) / 2)); border-top: 1px solid #e5e7eb; background: #fff; }.footer input { flex: 1; min-width: 0; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; outline: none; }.footer input:focus { border-color: #4f7cff; }.footer button { padding: 10px 22px; border: none; border-radius: 8px; background: #4f7cff; color: #fff; }.footer button:disabled { background: #b9c7f0; cursor: not-allowed; }
+.agent-select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid #52617a; border-radius: 5px; background: #2c384b; color: #eef3ff; font-size: 12px; }
+.conversation-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; grid-template-rows: auto auto; column-gap: 4px; }
+.conversation-select { grid-column: 1; grid-row: 1; padding-bottom: 3px; }
+.conversation-agent { grid-column: 1; grid-row: 2; min-width: 0; overflow: hidden; padding: 0 8px 8px; color: #8f9caf; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
+.delete-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.footer-agent-select { flex: 0 0 auto; width: 110px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
+.footer-model-select { flex: 0 1 210px; width: 210px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
 @media (max-width: 720px) { .sidebar { width: 210px; flex-basis: 210px; }.header { padding: 14px 16px; }.sub { display: none; }.chat, .footer { padding-left: 14px; padding-right: 14px; }.bubble { max-width: 88%; } }
-@media (max-width: 560px) { .app-shell { flex-direction: column; }.sidebar { width: 100%; flex: 0 0 auto; max-height: 142px; }.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; }.sidebar .brand-mark { margin: 0; }.new-button { width: auto; }.conversation-list { display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px; }.conversation-item { flex: 0 0 170px; margin: 0; background: #283447; } }
+@media (max-width: 560px) { .app-shell { flex-direction: column; }.sidebar { width: 100%; flex: 0 0 auto; max-height: 142px; }.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; }.sidebar .brand-mark { margin: 0; }.new-button { width: auto; }.conversation-list { display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px; }.conversation-item { flex: 0 0 190px; margin: 0; background: #283447; }.footer { flex-wrap: wrap; }.footer-agent-select { flex: 0 0 105px; width: 105px; }.footer-model-select { flex: 0 0 calc(100% - 115px); width: auto; }.footer input { order: 3; flex: 1 1 calc(100% - 96px); }.footer button { order: 4; flex: 0 0 76px; } }
 </style>
