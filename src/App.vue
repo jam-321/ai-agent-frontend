@@ -1,13 +1,19 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import AdminMonitor from './components/AdminMonitor.vue'
+import AdminConversations from './components/AdminConversations.vue'
+import AdminManagement from './components/AdminManagement.vue'
+import NavigationTree from './components/NavigationTree.vue'
 import { getCurrentUser, login, logout, register } from './api/auth'
 import { ApiError } from './api/http'
 import { deleteConversation, getConversationTurns, getProgress, listConversations, sendMessage } from './api/chat'
 import { listAgents } from './api/agents'
 import { listModels } from './api/models'
+import { useRoute, useRouter } from 'vue-router'
 
 const currentUser = ref(null)
+const route = useRoute()
+const router = useRouter()
 const initializing = ref(true)
 const authMode = ref('login')
 const username = ref('')
@@ -42,6 +48,7 @@ const selectedModel = computed(() => models.value.find((item) => modelKey(item) 
 onMounted(async () => {
   try {
     currentUser.value = await getCurrentUser()
+    syncRoute()
     await loadConversations()
     await loadAgents()
     await loadModels()
@@ -53,6 +60,17 @@ onMounted(async () => {
 })
 
 onUnmounted(stopPolling)
+
+watch(() => route.name, syncRoute)
+
+function syncRoute() {
+  if (route.meta.admin && !currentUser.value?.isAdmin) {
+    router.replace('/chat')
+    workspaceView.value = 'chat'
+    return
+  }
+  workspaceView.value = route.name === 'chat' ? 'chat' : route.name?.replace('admin-', 'admin-') || 'chat'
+}
 
 function switchAuthMode(mode) {
   authMode.value = mode
@@ -176,6 +194,7 @@ async function selectConversation(id) {
 }
 
 function newConversation() {
+  router.push('/chat')
   workspaceView.value = 'chat'
   stopPolling()
   activeConversationId.value = null
@@ -192,12 +211,18 @@ function newConversation() {
 }
 
 function showChat() {
+  router.push('/chat')
   workspaceView.value = 'chat'
 }
 
 function showMonitor() {
   stopPolling()
-  workspaceView.value = 'monitor'
+  router.push('/admin/dashboard')
+  workspaceView.value = 'admin-dashboard'
+}
+
+function navigate(path) {
+  router.push(path)
 }
 
 async function handleDeleteConversation(id) {
@@ -304,6 +329,7 @@ async function handleLogout() {
   try { await logout() } finally {
     stopPolling()
     currentUser.value = null
+    router.replace('/chat')
     workspaceView.value = 'chat'
     conversations.value = []
     agents.value = []
@@ -344,54 +370,44 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
     <aside class="sidebar">
       <div class="sidebar-head">
         <div class="brand-mark">AI Agent</div>
-        <nav class="workspace-nav">
-          <button :class="{ active: workspaceView === 'chat' }" @click="showChat">会话</button>
-          <button v-if="currentUser.isAdmin" :class="{ active: workspaceView === 'monitor' }" @click="showMonitor">监控</button>
-        </nav>
-        <button v-if="workspaceView === 'chat'" class="new-button" @click="newConversation">＋ 新会话</button>
-      </div>
-      <div v-if="workspaceView === 'chat'" class="conversation-list">
-        <div v-if="conversations.length === 0" class="sidebar-empty">还没有会话</div>
-        <div v-for="conversation in conversations" :key="conversation.id" class="conversation-item" :class="{ active: activeConversationId === conversation.id }" @click="selectConversation(conversation.id)">
-          <button class="conversation-select">{{ conversation.title || '未命名会话' }}</button>
-          <span class="conversation-agent">{{ conversation.agentKey }} · {{ conversation.modelName || '默认模型' }}</span>
-          <button class="delete-button" title="删除会话" @click.stop="handleDeleteConversation(conversation.id)">×</button>
-        </div>
+        <NavigationTree :admin="currentUser.isAdmin" :active="route.name" @navigate="navigate" />
       </div>
     </aside>
 
     <section class="workspace">
       <header class="header">
         <div>
-          <h1>{{ workspaceView === 'monitor' ? '运行监控' : activeConversationId ? (conversations.find((item) => item.id === activeConversationId)?.title || '会话') : '新会话' }}</h1>
-          <span class="sub">{{ workspaceView === 'monitor' ? '管理员' : '工具调用与过程会显示在消息下方' }}</span>
+          <h1>{{ route.meta.title || 'AI Agent' }}</h1>
+          <span class="sub">{{ currentUser.isAdmin ? '管理员工作台' : '会话管理' }}</span>
         </div>
         <div class="account"><span class="username">{{ currentUser.username }}</span><button class="logout-button" :disabled="logoutSubmitting" @click="handleLogout">退出</button></div>
       </header>
 
-      <AdminMonitor v-if="workspaceView === 'monitor' && currentUser.isAdmin" />
+      <AdminMonitor v-if="workspaceView === 'admin-dashboard' && currentUser.isAdmin" />
+      <AdminConversations v-else-if="workspaceView === 'admin-conversations' && currentUser.isAdmin" />
+      <AdminManagement v-else-if="workspaceView === 'admin-agents' && currentUser.isAdmin" mode="agents" />
+      <AdminManagement v-else-if="workspaceView === 'admin-users' && currentUser.isAdmin" mode="users" />
+      <AdminManagement v-else-if="workspaceView === 'admin-providers' && currentUser.isAdmin" mode="providers" />
+      <AdminManagement v-else-if="workspaceView === 'admin-audits' && currentUser.isAdmin" mode="audits" />
 
-      <main v-else class="chat">
-        <div v-if="messages.length === 0 && !runStatus" class="empty"><strong>开始和 Agent 对话</strong><span>当前会话的历史和工具过程会自动保存</span></div>
-        <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role">
-          <div class="bubble">
-            <span v-if="message.role === 'assistant' && message.modelName" class="message-model">
-              {{ message.agentKey }} · {{ message.modelProviderKey }} / {{ message.modelName }}
-            </span>
-            {{ message.content }}
-          </div>
-        </div>
-        <section v-if="runStatus" class="run-panel" :class="`run-${runStatus.toLowerCase()}`">
-          <div class="run-head"><span>执行过程</span><span class="run-status">{{ runStatus === 'REASONING' ? '处理中' : runStatus === 'COMPLETE' ? '已完成' : '失败' }}</span></div>
-          <div v-if="visibleRunSteps.length === 0 && runStatus === 'REASONING'" class="run-placeholder">正在准备 Agent...</div>
-          <div v-for="node in visibleRunSteps" :key="node.structureType === 'multiple' ? node.aggrKey : node.dbId" class="step" :class="nodeClass(node)">
-            <div class="step-head"><span>{{ node.nodeName }}</span><span>{{ nodeLabel(node) }}</span></div>
-            <div v-if="node.structureType === 'multiple'" class="step-events">
-              <div v-for="child in node.nodeList" :key="child.dbId" class="step-event"><span>{{ child.nodeStatus }}</span><pre>{{ child.content || '等待结果...' }}</pre></div>
+      <main v-else class="session-layout">
+        <aside class="conversation-pane">
+          <div class="conversation-pane-head"><strong>会话列表</strong><button class="new-button" @click="newConversation">＋ 新会话</button></div>
+          <div class="conversation-list">
+            <div v-if="conversations.length === 0" class="sidebar-empty">还没有会话</div>
+            <div v-for="conversation in conversations" :key="conversation.id" class="conversation-item" :class="{ active: activeConversationId === conversation.id }" @click="selectConversation(conversation.id)">
+              <button class="conversation-select">{{ conversation.title || '未命名会话' }}</button>
+              <span class="conversation-agent">{{ conversation.agentKey }} · {{ conversation.modelName || '默认模型' }}</span>
+              <button class="delete-button" title="删除会话" @click.stop="handleDeleteConversation(conversation.id)">×</button>
             </div>
-            <pre v-else-if="node.content">{{ node.content }}</pre>
           </div>
-          <p v-if="runError" class="run-error">{{ runError }}</p>
+        </aside>
+        <section class="chat-panel">
+          <main class="chat">
+            <div v-if="messages.length === 0 && !runStatus" class="empty"><strong>开始和 Agent 对话</strong><span>当前会话的历史和工具过程会自动保存</span></div>
+            <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role"><div class="bubble"><span v-if="message.role === 'assistant' && message.modelName" class="message-model">{{ message.agentKey }} · {{ message.modelProviderKey }} / {{ message.modelName }}</span>{{ message.content }}</div></div>
+            <section v-if="runStatus" class="run-panel" :class="`run-${runStatus.toLowerCase()}`"><div class="run-head"><span>执行过程</span><span class="run-status">{{ runStatus === 'REASONING' ? '处理中' : runStatus === 'COMPLETE' ? '已完成' : '失败' }}</span></div><div v-if="visibleRunSteps.length === 0 && runStatus === 'REASONING'" class="run-placeholder">正在准备 Agent...</div><div v-for="node in visibleRunSteps" :key="node.structureType === 'multiple' ? node.aggrKey : node.dbId" class="step" :class="nodeClass(node)"><div class="step-head"><span>{{ node.nodeName }}</span><span>{{ nodeLabel(node) }}</span></div><div v-if="node.structureType === 'multiple'" class="step-events"><div v-for="child in node.nodeList" :key="child.dbId" class="step-event"><span>{{ child.nodeStatus }}</span><pre>{{ child.content || '等待结果...' }}</pre></div></div><pre v-else-if="node.content">{{ node.content }}</pre></div><p v-if="runError" class="run-error">{{ runError }}</p></section>
+          </main>
         </section>
       </main>
 
@@ -428,7 +444,7 @@ button, input { font: inherit; } button { cursor: pointer; }
 .auth-tabs { display: flex; gap: 22px; border-bottom: 1px solid #e5e7eb; margin-bottom: 22px; }.auth-tabs button { padding: 0 0 10px; border: 0; background: transparent; color: #9ca3af; border-bottom: 2px solid transparent; }.auth-tabs button.active { color: #4f7cff; border-bottom-color: #4f7cff; }
 .auth-form { display: grid; gap: 16px; }.auth-form label { display: grid; gap: 7px; color: #374151; font-size: 14px; }.auth-form input { width: 100%; padding: 11px 12px; border: 1px solid #d1d5db; border-radius: 7px; outline: none; }.auth-form input:focus { border-color: #4f7cff; box-shadow: 0 0 0 3px rgba(79, 124, 255, .12); }
 .primary-button { padding: 11px 16px; border: 0; border-radius: 7px; background: #4f7cff; color: #fff; }.primary-button:disabled, .logout-button:disabled { opacity: .55; cursor: not-allowed; }.error { color: #dc2626; font-size: 13px; line-height: 1.5; }.notice { color: #15803d; font-size: 13px; line-height: 1.5; }
-.app-shell { display: flex; height: 100%; }.sidebar { width: 260px; flex: 0 0 260px; background: #202938; color: #dbe3ef; display: flex; flex-direction: column; }.sidebar-head { padding: 22px 18px 16px; border-bottom: 1px solid #344052; }.sidebar .brand-mark { margin-bottom: 18px; color: #92adff; }.new-button { width: 100%; padding: 9px 12px; border: 1px solid #52617a; border-radius: 6px; color: #eef3ff; background: #2c384b; text-align: left; }.new-button:hover { background: #35435a; }.conversation-list { overflow-y: auto; padding: 10px; }.sidebar-empty { padding: 18px 8px; color: #8f9caf; font-size: 13px; }.conversation-item { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; border-radius: 6px; }.conversation-item.active, .conversation-item:hover { background: #34445c; }.conversation-select { flex: 1; min-width: 0; overflow: hidden; padding: 9px 8px; border: 0; color: inherit; background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.delete-button { width: 28px; height: 28px; border: 0; background: transparent; color: #a9b4c5; font-size: 19px; }.delete-button:hover { color: #fff; }
+ .app-shell { display: flex; height: 100%; }.sidebar { width: 320px; flex: 0 0 320px; overflow-y: auto; background: #202938; color: #dbe3ef; display: flex; flex-direction: column; }.sidebar-head { padding: 22px 18px 16px; border-bottom: 1px solid #344052; }.sidebar .brand-mark { margin-bottom: 18px; color: #92adff; }.new-button { width: 100%; padding: 9px 12px; border: 1px solid #52617a; border-radius: 6px; color: #eef3ff; background: #2c384b; text-align: left; }.new-button:hover { background: #35435a; }.conversation-list { overflow-y: auto; padding: 10px; }.sidebar-empty { padding: 18px 8px; color: #8f9caf; font-size: 13px; }.conversation-item { display: flex; align-items: center; gap: 4px; margin-bottom: 4px; border-radius: 6px; }.conversation-item.active, .conversation-item:hover { background: #34445c; }.conversation-select { flex: 1; min-width: 0; overflow: hidden; padding: 9px 8px; border: 0; color: inherit; background: transparent; text-align: left; text-overflow: ellipsis; white-space: nowrap; }.delete-button { width: 28px; height: 28px; border: 0; background: transparent; color: #a9b4c5; font-size: 19px; }.delete-button:hover { color: #fff; }
 .workspace-nav { display: flex; gap: 4px; margin-bottom: 12px; }
 .workspace-nav button { flex: 1; padding: 7px 9px; border: 1px solid transparent; border-radius: 5px; background: transparent; color: #aeb9ca; }
 .workspace-nav button:hover, .workspace-nav button.active { border-color: #52617a; background: #2c384b; color: #fff; }
@@ -443,7 +459,8 @@ button, input { font: inherit; } button { cursor: pointer; }
 .conversation-agent { grid-column: 1; grid-row: 2; min-width: 0; overflow: hidden; padding: 0 8px 8px; color: #8f9caf; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .delete-button { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
 .footer-agent-select { flex: 0 0 auto; width: 110px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
-.footer-model-select { flex: 0 1 210px; width: 210px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
-@media (max-width: 720px) { .sidebar { width: 210px; flex-basis: 210px; }.header { padding: 14px 16px; }.sub { display: none; }.chat, .footer { padding-left: 14px; padding-right: 14px; }.bubble { max-width: 88%; } }
-@media (max-width: 560px) { .app-shell { flex-direction: column; }.sidebar { width: 100%; flex: 0 0 auto; max-height: 142px; }.sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 10px 14px; }.sidebar .brand-mark { margin: 0; }.new-button { width: auto; }.conversation-list { display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px; }.conversation-item { flex: 0 0 190px; margin: 0; background: #283447; }.footer { flex-wrap: wrap; }.footer-agent-select { flex: 0 0 105px; width: 105px; }.footer-model-select { flex: 0 0 calc(100% - 115px); width: auto; }.footer input { order: 3; flex: 1 1 calc(100% - 96px); }.footer button { order: 4; flex: 0 0 76px; } }
+ .footer-model-select { flex: 0 1 210px; width: 210px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
+ .tree-nav { display: grid; gap: 8px; }.nav-group { border-top: 1px solid #344052; padding-top: 8px; }.nav-group-title, .nav-item { width: 100%; border: 0; color: #dbe3ef; background: transparent; text-align: left; }.nav-group-title { padding: 9px 8px; font-weight: 700; }.nav-group-title:hover, .nav-item:hover, .nav-item.active { background: #34445c; }.nav-children { display: grid; gap: 2px; padding: 2px 0 6px 20px; }.nav-item { padding: 8px 10px; color: #aeb9ca; font-size: 13px; border-radius: 4px; }.nav-item.active { color: #fff; }.tree-arrow { display: inline-block; width: 18px; color: #8ea8dc; }.session-layout { display: flex; flex: 1; min-height: 0; }.conversation-pane { width: 290px; flex: 0 0 290px; overflow-y: auto; border-right: 1px solid #e1e5eb; background: #f8f9fb; }.conversation-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px; border-bottom: 1px solid #e1e5eb; }.conversation-pane-head .new-button { width: auto; padding: 7px 9px; color: #40598d; border-color: #cbd5eb; background: #fff; }.chat-panel { display: flex; flex: 1; min-width: 0; flex-direction: column; }.chat-panel .chat { min-height: 0; }.admin-page { flex: 1; min-width: 0; overflow: auto; padding: 24px; background: #f5f6f8; }.page-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }.page-toolbar h2 { font-size: 20px; }.page-toolbar span { color: #7b8493; font-size: 13px; }.page-toolbar button, .admin-page table button { padding: 8px 12px; border: 1px solid #cbd2dc; border-radius: 6px; background: #fff; color: #3e4a5b; }.page-error { margin-bottom: 12px; color: #b42318; }.admin-table-wrap { overflow-x: auto; border: 1px solid #dde1e8; background: #fff; }.admin-page table { width: 100%; border-collapse: collapse; font-size: 13px; }.admin-page th, .admin-page td { padding: 11px 12px; border-bottom: 1px solid #e9ebef; text-align: left; white-space: nowrap; }.admin-page th { background: #f8f9fb; color: #626d7e; font-size: 12px; }.admin-page tbody tr:hover { background: #f6f8fc; }.admin-page td small { display: block; margin-top: 3px; color: #8791a0; }.empty-cell { padding: 36px !important; color: #8992a2; text-align: center !important; }.text-button { border: 0 !important; padding: 4px 7px !important; color: #315fbb !important; background: transparent !important; }.text-button.danger { color: #b42318 !important; }.pager { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 0; color: #697386; font-size: 13px; }.drawer-backdrop, .modal-backdrop { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: flex-end; background: rgba(24,31,43,.28); }.drawer { width: min(780px, 92vw); height: 100%; overflow-y: auto; background: #fff; box-shadow: -8px 0 24px rgba(15,23,42,.14); }.drawer > header, .edit-modal > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid #e2e5ea; }.drawer header button, .edit-modal header button { border: 0; background: transparent; font-size: 24px; }.drawer header span { color: #7b8493; font-size: 12px; }.tree-detail { padding: 18px 20px; }.turn-tree { border-top: 1px solid #e4e8ee; padding: 12px 0; }.turn-tree summary, .tool-tree summary { cursor: pointer; font-weight: 600; color: #354052; }.turn-meta { display: grid; gap: 12px; padding: 12px 0 2px 18px; }.turn-meta b { color: #687486; font-size: 12px; }.turn-meta pre, .tool-tree pre { max-height: 240px; overflow: auto; margin-top: 6px; padding: 10px; background: #f7f8fa; color: #485465; font: 12px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.tool-tree { display: grid; gap: 8px; border-left: 2px solid #b5c6ef; padding-left: 12px; }.modal-backdrop { align-items: center; justify-content: center; padding: 20px; }.edit-modal { width: min(640px, 96vw); max-height: 92vh; overflow-y: auto; background: #fff; box-shadow: 0 15px 40px rgba(15,23,42,.2); }.edit-modal label { display: grid; gap: 6px; padding: 9px 20px 0; color: #4d5867; font-size: 13px; }.edit-modal input, .edit-modal textarea { width: 100%; padding: 8px 9px; border: 1px solid #cdd4df; border-radius: 5px; font: inherit; }.edit-modal .primary-button { margin: 18px 20px; }
+ @media (max-width: 720px) { .sidebar { width: 250px; flex-basis: 250px; }.conversation-pane { width: 230px; flex-basis: 230px; }.header { padding: 14px 16px; }.sub { display: none; }.chat, .footer { padding-left: 14px; padding-right: 14px; }.bubble { max-width: 88%; }.admin-page { padding: 16px; } }
+ @media (max-width: 560px) { .app-shell { flex-direction: column; }.sidebar { width: 100%; flex: 0 0 auto; max-height: 190px; }.sidebar-head { padding: 10px 14px; }.sidebar .brand-mark { margin-bottom: 8px; }.tree-nav { display: flex; gap: 8px; overflow-x: auto; }.nav-group { min-width: 190px; border-top: 0; padding: 0; }.nav-children { padding-left: 0; }.session-layout { flex-direction: column; }.conversation-pane { width: 100%; flex: 0 0 155px; border-right: 0; border-bottom: 1px solid #e1e5eb; }.conversation-pane .conversation-list { display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px; }.conversation-pane .conversation-item { flex: 0 0 190px; margin: 0; }.footer { flex-wrap: wrap; }.footer-agent-select { flex: 0 0 105px; width: 105px; }.footer-model-select { flex: 0 0 calc(100% - 115px); width: auto; }.footer input { order: 3; flex: 1 1 calc(100% - 96px); }.footer button { order: 4; flex: 0 0 76px; } }
 </style>
