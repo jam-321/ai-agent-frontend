@@ -36,7 +36,7 @@ export async function request(path, options = {}) {
   }
 
   const headers = new Headers(options.headers || {})
-  if (options.body && !headers.has('Content-Type')) {
+  if (options.body && !(options.body instanceof FormData) && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json')
   }
   const csrfToken = getCookie('XSRF-TOKEN')

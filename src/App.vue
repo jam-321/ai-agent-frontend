@@ -33,6 +33,8 @@ const selectedModelKey = ref('')
 const activeConversationId = ref(null)
 const messages = ref([])
 const input = ref('')
+const selectedImages = ref([])
+const imagePreviews = ref([])
 const loading = ref(false)
 const runStatus = ref(null)
 const runTurnId = ref(null)
@@ -174,7 +176,9 @@ async function selectConversation(id) {
     turnId: turn.turnId,
     agentKey: turn.agentKey,
     modelProviderKey: turn.modelProviderKey,
-    modelName: turn.modelName
+    modelName: turn.modelName,
+    imageCount: turn.attachmentIds?.length || 0,
+    attachmentIds: turn.attachmentIds || []
   }))
   const grouped = new Map()
   for (const turn of turns) {
@@ -208,6 +212,7 @@ function newConversation() {
   runError.value = ''
   runSelection.value = null
   input.value = ''
+  clearImages()
 }
 
 function showChat() {
@@ -235,14 +240,20 @@ async function handleDeleteConversation(id) {
 async function handleSend() {
   const text = input.value.trim()
   if (!text || loading.value) return
+  if (selectedImages.value.length && !selectedModel.value?.supportsImageInput) {
+    runError.value = '当前模型不支持图片输入，请切换到支持图片的模型。'
+    return
+  }
+  const submittedImages = [...selectedImages.value]
   const submittedSelection = {
     agentKey: selectedAgentKey.value,
     modelProviderKey: selectedModel.value?.providerKey || null,
     modelName: selectedModel.value?.modelName || null
   }
   runSelection.value = submittedSelection
-  messages.value.push({ role: 'user', content: text, ...submittedSelection })
+  messages.value.push({ role: 'user', content: text, imageCount: submittedImages.length, ...submittedSelection })
   input.value = ''
+  clearImages()
   loading.value = true
   runStatus.value = 'REASONING'
   runSteps.value = []
@@ -253,7 +264,8 @@ async function handleSend() {
       activeConversationId.value,
       selectedAgentKey.value,
       selectedModel.value?.providerKey || null,
-      selectedModel.value?.modelName || null
+      selectedModel.value?.modelName || null,
+      submittedImages
     )
     activeConversationId.value = accepted.conversationId
     runTurnId.value = accepted.turnId
@@ -268,6 +280,53 @@ async function handleSend() {
       authError.value = '登录已过期，请重新登录。'
     }
   }
+}
+
+function handleImageChange(event) {
+  addImageFiles([...(event.target.files || [])])
+  event.target.value = ''
+}
+
+function handlePaste(event) {
+  const items = [...(event.clipboardData?.items || [])]
+  const imageFiles = items
+    .filter((item) => item.kind === 'file' && item.type.startsWith('image/'))
+    .map((item) => item.getAsFile())
+    .filter(Boolean)
+
+  if (!imageFiles.length) return
+
+  addImageFiles(imageFiles)
+
+  // 剪贴板只有图片时阻止浏览器把无意义的二进制内容粘进输入框；含文字时保留文字粘贴行为。
+  if (!items.some((item) => item.kind === 'string' && item.type === 'text/plain')) {
+    event.preventDefault()
+  }
+}
+
+function addImageFiles(files) {
+  const valid = files.filter((file) => (
+    ['image/jpeg', 'image/png', 'image/gif', 'image/webp'].includes(file.type)
+      && file.size <= 20 * 1024 * 1024
+  ))
+  if (!valid.length) return
+
+  imagePreviews.value.forEach((url) => URL.revokeObjectURL(url))
+  selectedImages.value = [...selectedImages.value, ...valid].slice(0, 5)
+  imagePreviews.value = selectedImages.value.map((file) => URL.createObjectURL(file))
+}
+
+function removeImage(index) {
+  const oldPreviews = imagePreviews.value
+  selectedImages.value = selectedImages.value.filter((_, itemIndex) => itemIndex !== index)
+  oldPreviews.forEach((url) => URL.revokeObjectURL(url))
+  imagePreviews.value = selectedImages.value.map((file) => URL.createObjectURL(file))
+}
+
+function clearImages() {
+  imagePreviews.value.forEach((url) => URL.revokeObjectURL(url))
+  selectedImages.value = []
+  imagePreviews.value = []
 }
 
 function startPolling(conversationId, turnId) {
@@ -405,7 +464,7 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
         <section class="chat-panel">
           <main class="chat">
             <div v-if="messages.length === 0 && !runStatus" class="empty"><strong>开始和 Agent 对话</strong><span>当前会话的历史和工具过程会自动保存</span></div>
-            <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role"><div class="bubble"><span v-if="message.role === 'assistant' && message.modelName" class="message-model">{{ message.agentKey }} · {{ message.modelProviderKey }} / {{ message.modelName }}</span>{{ message.content }}</div></div>
+            <div v-for="(message, index) in messages" :key="`${message.turnId || 'draft'}-${index}`" class="row" :class="message.role"><div class="bubble"><span v-if="message.role === 'assistant' && message.modelName" class="message-model">{{ message.agentKey }} · {{ message.modelProviderKey }} / {{ message.modelName }}</span><span v-if="message.imageCount" class="message-attachments">{{ message.imageCount }} 张图片</span>{{ message.content }}</div></div>
             <section v-if="runStatus" class="run-panel" :class="`run-${runStatus.toLowerCase()}`"><div class="run-head"><span>执行过程</span><span class="run-status">{{ runStatus === 'REASONING' ? '处理中' : runStatus === 'COMPLETE' ? '已完成' : '失败' }}</span></div><div v-if="visibleRunSteps.length === 0 && runStatus === 'REASONING'" class="run-placeholder">正在准备 Agent...</div><div v-for="node in visibleRunSteps" :key="node.structureType === 'multiple' ? node.aggrKey : node.dbId" class="step" :class="nodeClass(node)"><div class="step-head"><span>{{ node.nodeName }}</span><span>{{ nodeLabel(node) }}</span></div><div v-if="node.structureType === 'multiple'" class="step-events"><div v-for="child in node.nodeList" :key="child.dbId" class="step-event"><span>{{ child.nodeStatus }}</span><pre>{{ child.content || '等待结果...' }}</pre></div></div><pre v-else-if="node.content">{{ node.content }}</pre></div><p v-if="runError" class="run-error">{{ runError }}</p></section>
           </main>
         </section>
@@ -424,8 +483,19 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
             :title="model.unavailableReason || ''"
           >{{ model.providerName }} · {{ model.displayName }}{{ model.available ? '' : '（暂不可用）' }}</option>
         </select>
-        <input v-model="input" placeholder="输入消息，回车发送" :disabled="loading" @keyup.enter="handleSend" />
-        <button :disabled="loading || !input.trim() || !selectedModel" @click="handleSend">发送</button>
+        <label class="image-button" title="添加图片">
+          图片
+          <input type="file" accept="image/jpeg,image/png,image/gif,image/webp" multiple :disabled="loading" @change="handleImageChange" />
+        </label>
+        <div v-if="selectedImages.length" class="image-preview-list">
+          <span v-for="(preview, index) in imagePreviews" :key="preview" class="image-preview">
+            <img :src="preview" alt="待发送图片" />
+            <button type="button" title="移除图片" @click="removeImage(index)">×</button>
+          </span>
+        </div>
+        <span v-if="selectedImages.length && !selectedModel?.supportsImageInput" class="image-warning">当前模型不支持图片</span>
+        <input v-model="input" placeholder="输入消息，回车发送，也可直接粘贴截图" :disabled="loading" @paste="handlePaste" @keyup.enter="handleSend" />
+        <button :disabled="loading || !input.trim() || !selectedModel || (selectedImages.length > 0 && !selectedModel.supportsImageInput)" @click="handleSend">发送</button>
       </footer>
     </section>
   </div>
@@ -451,8 +521,10 @@ button, input { font: inherit; } button { cursor: pointer; }
 .workspace { display: flex; flex: 1; min-width: 0; flex-direction: column; }.header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 24px; border-bottom: 1px solid #e5e7eb; background: #fff; }.header h1 { font-size: 20px; }.sub { color: #888; font-size: 13px; }.account { display: flex; align-items: center; gap: 12px; min-width: 0; }.username { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 14px; font-weight: 600; }.logout-button { padding: 7px 11px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #4b5563; font-size: 13px; }
 .chat { flex: 1; overflow-y: auto; padding: 24px max(20px, calc((100% - 820px) / 2)); display: flex; flex-direction: column; gap: 12px; }.empty { display: grid; gap: 8px; place-items: center; color: #9ca3af; margin: auto; }.empty strong { color: #4b5563; font-size: 18px; }.empty span { font-size: 13px; }.row { display: flex; }.row.user { justify-content: flex-end; }.row.assistant { justify-content: flex-start; }.bubble { max-width: min(78%, 720px); padding: 10px 14px; border-radius: 12px; line-height: 1.6; white-space: pre-wrap; word-break: break-word; }.user .bubble { background: #4f7cff; color: #fff; border-bottom-right-radius: 4px; }.assistant .bubble { background: #fff; color: #333; border: 1px solid #e5e7eb; border-bottom-left-radius: 4px; }
 .message-model { display: block; margin-bottom: 5px; color: #7c8796; font-size: 11px; line-height: 1.4; }
+.message-attachments { display: block; margin-bottom: 5px; color: #65748a; font-size: 12px; }
 .run-panel { width: min(100%, 720px); padding: 12px 14px; border: 1px solid #dbe2ed; border-radius: 8px; background: #fff; }.run-head, .step-head { display: flex; justify-content: space-between; gap: 12px; align-items: center; font-size: 13px; font-weight: 600; }.run-status { color: #4f7cff; }.run-complete .run-status { color: #15803d; }.run-error .run-status, .run-error { color: #b91c1c; }.run-placeholder { padding: 12px 0 4px; color: #8b95a5; font-size: 13px; }.step { margin-top: 10px; padding: 10px; border-left: 3px solid #9db4ff; background: #f7f9fc; }.step-success { border-left-color: #57a773; }.step-error { border-left-color: #df6b6b; }.step-head span:last-child { color: #6b7280; font-size: 12px; font-weight: 400; }.step pre, .step-event pre { margin-top: 7px; color: #526071; font: 12px/1.5 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.step-events { display: grid; gap: 7px; }.step-event { padding-top: 7px; border-top: 1px solid #e5eaf1; }.step-event span { color: #7c8796; font-size: 11px; }
 .footer { display: flex; gap: 10px; padding: 14px max(20px, calc((100% - 820px) / 2)); border-top: 1px solid #e5e7eb; background: #fff; }.footer input { flex: 1; min-width: 0; padding: 10px 14px; border: 1px solid #d1d5db; border-radius: 8px; font-size: 14px; outline: none; }.footer input:focus { border-color: #4f7cff; }.footer button { padding: 10px 22px; border: none; border-radius: 8px; background: #4f7cff; color: #fff; }.footer button:disabled { background: #b9c7f0; cursor: not-allowed; }
+.image-button { position: relative; display: inline-flex; align-items: center; padding: 9px 10px; border: 1px solid #d1d5db; border-radius: 8px; color: #4b5563; font-size: 13px; cursor: pointer; white-space: nowrap; }.image-button input { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; }.image-preview-list { display: flex; gap: 5px; align-items: center; }.image-preview { position: relative; display: block; width: 42px; height: 42px; }.image-preview img { width: 42px; height: 42px; border-radius: 5px; object-fit: cover; border: 1px solid #d1d5db; }.image-preview button { position: absolute; top: -7px; right: -7px; width: 18px; height: 18px; padding: 0; border-radius: 50%; background: #374151; color: #fff; font-size: 13px; line-height: 16px; }.image-warning { color: #b45309; font-size: 11px; white-space: nowrap; }
 .agent-select { flex: 1; min-width: 0; padding: 5px 8px; border: 1px solid #52617a; border-radius: 5px; background: #2c384b; color: #eef3ff; font-size: 12px; }
 .conversation-item { display: grid; grid-template-columns: minmax(0, 1fr) 28px; grid-template-rows: auto auto; column-gap: 4px; }
 .conversation-select { grid-column: 1; grid-row: 1; padding-bottom: 3px; }

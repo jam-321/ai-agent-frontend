@@ -5,11 +5,19 @@ export async function sendMessage(
   conversationId = null,
   agentKey = null,
   modelProviderKey = null,
-  modelName = null
+  modelName = null,
+  images = []
 ) {
+  const form = new FormData()
+  form.append('message', message)
+  if (conversationId != null) form.append('conversationId', String(conversationId))
+  if (agentKey) form.append('agentKey', agentKey)
+  if (modelProviderKey) form.append('modelProviderKey', modelProviderKey)
+  if (modelName) form.append('modelName', modelName)
+  images.forEach((image) => form.append('images', image, image.name))
   const data = await request('/api/chat', {
     method: 'POST',
-    body: JSON.stringify({ conversationId, message, agentKey, modelProviderKey, modelName })
+    body: form
   })
   return data
 }
