@@ -1,6 +1,7 @@
 <script setup>
 import { computed, onMounted, ref } from 'vue'
 import { getMonitoredConversation, listMonitoredConversations } from '../api/admin'
+import { groupModelCallEvents } from '../utils/modelCallEvents'
 
 const rows = ref([])
 const page = ref(1)
@@ -47,7 +48,9 @@ function nodesForTurn(turnId, type = null) {
 }
 
 function processNodesForTurn(turnId) {
-  return nodesForTurn(turnId).filter((node) => node.type !== 'TOOL_CALL')
+  return groupModelCallEvents(
+    nodesForTurn(turnId).filter((node) => node.type !== 'TOOL_CALL')
+  )
 }
 
 function turnStatus(turn) {
@@ -73,6 +76,32 @@ function statusText(status) {
 function attachmentUrl(assetId) {
   return `/api/admin/attachments/${encodeURIComponent(assetId)}/content`
 }
+
+function formatTokens(value) {
+  const number = Number(value || 0)
+  if (number >= 1000000) return `${(number / 1000000).toFixed(2)}M`
+  if (number >= 1000) return `${(number / 1000).toFixed(1)}K`
+  return new Intl.NumberFormat('zh-CN').format(number)
+}
+
+// 旧 MODEL_CALL 节点没有缓存字段，必须和供应商真实返回 0 区分展示。
+function cacheHitRate(hit, miss, reportedCalls) {
+  if (!Number(reportedCalls || 0)) return '未上报'
+  const cacheHit = Number(hit || 0)
+  const cacheMiss = Number(miss || 0)
+  const total = cacheHit + cacheMiss
+  return total > 0 ? `${((cacheHit / total) * 100).toFixed(1)}%` : '0.0%'
+}
+
+function modelCacheReported(usage) {
+  return usage && Object.prototype.hasOwnProperty.call(usage, 'cachedInputTokens')
+}
+
+function modelCacheHitRate(usage) {
+  return cacheHitRate(usage?.cachedInputTokens, usage?.cacheMissInputTokens,
+    modelCacheReported(usage) ? 1 : 0)
+}
+
 </script>
 
 <template>
@@ -84,13 +113,13 @@ function attachmentUrl(assetId) {
     <p v-if="error" class="page-error">{{ error }}</p>
     <div class="admin-table-wrap">
       <table>
-        <thead><tr><th>ID</th><th>用户</th><th>标题</th><th>轮次</th><th>节点</th><th>状态</th><th>更新时间</th></tr></thead>
+        <thead><tr><th>ID</th><th>用户</th><th>标题</th><th>轮次</th><th>节点</th><th>模型调用</th><th>Token</th><th>缓存命中率</th><th>状态</th><th>更新时间</th></tr></thead>
         <tbody>
           <tr v-for="row in rows" :key="row.id" @click="open(row.id)">
             <td>{{ row.id }}</td><td>{{ row.username }}</td><td>{{ row.title || '未命名会话' }}</td>
-            <td>{{ row.turnCount }}</td><td>{{ row.nodeCount }}</td><td><span class="status" :class="row.latestStatus?.toLowerCase()">{{ statusText(row.latestStatus) }}</span></td><td>{{ format(row.updatedAt) }}</td>
+            <td>{{ row.turnCount }}</td><td>{{ row.nodeCount }}</td><td>{{ row.modelCallCount }}</td><td>{{ formatTokens(row.totalTokens) }}</td><td>{{ cacheHitRate(row.cachedInputTokens, row.cacheMissInputTokens, row.cacheUsageReportedCalls) }}</td><td><span class="status" :class="row.latestStatus?.toLowerCase()">{{ statusText(row.latestStatus) }}</span></td><td>{{ format(row.updatedAt) }}</td>
           </tr>
-          <tr v-if="!loading && !rows.length"><td colspan="7" class="empty-cell">暂无数据</td></tr>
+          <tr v-if="!loading && !rows.length"><td colspan="10" class="empty-cell">暂无数据</td></tr>
         </tbody>
       </table>
     </div>
@@ -115,7 +144,8 @@ function attachmentUrl(assetId) {
             <div><span>用户名</span><strong>{{ detail.conversation.username }}</strong></div>
             <div><span>问答轮次</span><strong>{{ detail.conversation.turnCount }}</strong></div>
             <div><span>过程节点</span><strong>{{ detail.conversation.nodeCount }}</strong></div>
-            <div><span>更新时间</span><strong>{{ format(detail.conversation.updatedAt) }}</strong></div>
+            <div><span>Token 总量</span><strong>{{ formatTokens(detail.conversation.totalTokens) }}</strong></div>
+            <div><span>缓存命中率</span><strong>{{ cacheHitRate(detail.conversation.cachedInputTokens, detail.conversation.cacheMissInputTokens, detail.conversation.cacheUsageReportedCalls) }}</strong></div>
           </section>
 
           <section v-for="turn in detail.tree" :key="turn.turnId" class="turn-tree">
@@ -141,6 +171,14 @@ function attachmentUrl(assetId) {
                     <div><dt>Trace ID</dt><dd class="breakable">{{ display(turn.userTurn?.traceId || turn.assistantTurn?.traceId) }}</dd></div>
                     <div><dt>用户时间</dt><dd>{{ format(turn.userTurn?.createdAt) }}</dd></div>
                     <div><dt>助手时间</dt><dd>{{ format(turn.assistantTurn?.createdAt) }}</dd></div>
+                    <div><dt>模型调用</dt><dd>{{ turn.tokenUsage?.modelCallCount || 0 }}</dd></div>
+                    <div><dt>输入 Token</dt><dd>{{ formatTokens(turn.tokenUsage?.inputTokens) }}</dd></div>
+                    <div><dt>输出 Token</dt><dd>{{ formatTokens(turn.tokenUsage?.outputTokens) }}</dd></div>
+                    <div><dt>缓存 Token</dt><dd>{{ formatTokens(turn.tokenUsage?.cachedInputTokens) }}</dd></div>
+                    <div><dt>未命中 Token</dt><dd>{{ turn.tokenUsage?.cacheUsageReportedCalls ? formatTokens(turn.tokenUsage.cacheMissInputTokens) : '未上报' }}</dd></div>
+                    <div><dt>缓存命中率</dt><dd>{{ cacheHitRate(turn.tokenUsage?.cachedInputTokens, turn.tokenUsage?.cacheMissInputTokens, turn.tokenUsage?.cacheUsageReportedCalls) }}</dd></div>
+                    <div><dt>Token 总计</dt><dd>{{ formatTokens(turn.tokenUsage?.totalTokens) }}</dd></div>
+                    <div><dt>模型耗时</dt><dd>{{ turn.tokenUsage?.durationMs ? `${turn.tokenUsage.durationMs} ms` : '-' }}</dd></div>
                   </dl>
                 </section>
 
@@ -171,13 +209,6 @@ function attachmentUrl(assetId) {
                           <div class="tool-summary"><span>聚合键：{{ tool.aggrKey }}</span><span>状态：{{ tool.status }}</span></div>
                           <div class="tool-payload"><b>请求入参摘要</b><pre>{{ tool.input || '-' }}</pre></div>
                           <div class="tool-payload"><b>返回结果摘要</b><pre>{{ tool.output || '暂无结果' }}</pre></div>
-                          <details open class="event-list">
-                            <summary>节点事件明细（{{ tool.events.length }} 条）</summary>
-                            <article v-for="event in tool.events" :key="event.id" class="event-node">
-                              <div class="event-heading"><strong>{{ event.status }}</strong><span>{{ event.nodeName }}</span><span>A{{ event.attemptNo }} / R{{ display(event.roundNo) }} / C{{ display(event.callIndex) }}</span><span>{{ format(event.createdAt) }}</span></div>
-                              <pre>{{ event.content || '-' }}</pre>
-                            </article>
-                          </details>
                         </div>
                       </details>
                     </div>
@@ -188,10 +219,38 @@ function attachmentUrl(assetId) {
                   <details open>
                     <summary><span class="branch-label process-label">二级节点：其他过程事件</span><span class="branch-count">{{ processNodesForTurn(turn.turnId).length }} 个</span></summary>
                     <div class="process-tree">
-                      <article v-for="node in processNodesForTurn(turn.turnId)" :key="node.id" class="process-node">
-                        <div class="event-heading"><strong>{{ node.nodeName }}</strong><span>{{ node.type }}</span><span class="status" :class="node.status.toLowerCase()">{{ node.status }}</span><span>A{{ node.attemptNo }} / R{{ display(node.roundNo) }}</span><span>{{ format(node.createdAt) }}</span></div>
-                        <pre>{{ node.content || '-' }}</pre>
-                      </article>
+                      <template v-for="item in processNodesForTurn(turn.turnId)" :key="item.key">
+                        <article v-if="item.kind === 'modelCall'" class="process-node model-call-node">
+                          <div class="event-heading"><strong>模型调用</strong><span>MODEL_CALL</span><span class="status" :class="item.status.toLowerCase()">{{ item.status }}</span><span>A{{ item.start.attemptNo }} / R{{ display(item.start.roundNo) }}</span><span>{{ format(item.start.createdAt) }}</span></div>
+                          <div class="model-request-row">
+                            <span>供应商 <b>{{ item.request.providerKey || '-' }}</b></span>
+                            <span>请求模型 <b>{{ item.request.requestedModel || '-' }}</b></span>
+                            <span>预计输入 <b>{{ item.request.estimatedInputTokens == null ? '-' : formatTokens(item.request.estimatedInputTokens) }}</b></span>
+                            <span>调用用途 <b>{{ item.request.purpose || '-' }}</b></span>
+                          </div>
+                          <div v-if="item.usage" class="token-usage">
+                            <span>输入 <b>{{ formatTokens(item.usage.inputTokens) }}</b></span>
+                            <span>输出 <b>{{ formatTokens(item.usage.outputTokens) }}</b></span>
+                            <span>缓存命中 <b>{{ modelCacheReported(item.usage) ? formatTokens(item.usage.cachedInputTokens) : '未上报' }}</b></span>
+                            <span>缓存未命中 <b>{{ modelCacheReported(item.usage) ? formatTokens(item.usage.cacheMissInputTokens) : '未上报' }}</b></span>
+                            <span>缓存命中率 <b>{{ modelCacheHitRate(item.usage) }}</b></span>
+                            <span v-if="item.usage.cacheWriteInputTokens != null">缓存写入 <b>{{ formatTokens(item.usage.cacheWriteInputTokens) }}</b></span>
+                            <span>推理 <b>{{ formatTokens(item.usage.reasoningTokens) }}</b></span>
+                            <span>耗时 <b>{{ item.usage.durationMs == null ? '-' : `${item.usage.durationMs} ms` }}</b></span>
+                          </div>
+                          <details class="model-event-details">
+                            <summary>原始事件（{{ item.events.length }} 条）</summary>
+                            <div v-for="event in item.events" :key="event.id" class="model-event-row">
+                              <span>{{ event.status }} · {{ format(event.createdAt) }}</span>
+                              <pre>{{ event.content || '-' }}</pre>
+                            </div>
+                          </details>
+                        </article>
+                        <article v-else class="process-node">
+                          <div class="event-heading"><strong>{{ item.node.nodeName }}</strong><span>{{ item.node.type }}</span><span class="status" :class="item.node.status.toLowerCase()">{{ item.node.status }}</span><span>A{{ item.node.attemptNo }} / R{{ display(item.node.roundNo) }}</span><span>{{ format(item.node.createdAt) }}</span></div>
+                          <pre>{{ item.node.content || '-' }}</pre>
+                        </article>
+                      </template>
                     </div>
                   </details>
                 </section>
@@ -215,13 +274,13 @@ function attachmentUrl(assetId) {
 .detail-drawer > header span { color: #7a8494; }
 .detail-loading { display: grid; place-items: center; height: 180px; color: #7b8493; }
 .tree-detail { padding: 20px 28px 40px; }
-.conversation-meta { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 0; margin-bottom: 22px; border: 1px solid #dfe4eb; border-radius: 9px; overflow: hidden; background: #fff; box-shadow: 0 2px 8px rgba(28, 39, 57, .04); }
+.conversation-meta { display: grid; grid-template-columns: repeat(7, minmax(0, 1fr)); gap: 0; margin-bottom: 22px; border: 1px solid #dfe4eb; border-radius: 9px; overflow: hidden; background: #fff; box-shadow: 0 2px 8px rgba(28, 39, 57, .04); }
 .conversation-meta div { display: grid; gap: 6px; min-width: 0; min-height: 66px; padding: 12px 13px; border-right: 1px solid #e8ebf0; background: #fff; }
 .conversation-meta div:last-child { border-right: 0; }
 .conversation-meta span, .metadata-list dt { color: #7a8494; font-size: 11px; }
 .conversation-meta strong { overflow: hidden; color: #202938; font-size: 14px; text-overflow: ellipsis; white-space: nowrap; }
 .turn-tree { border-top: 1px solid #dfe4eb; padding: 13px 0; }
-.turn-tree > details > summary, .child-branch > details > summary, .event-list > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; cursor: pointer; color: #354052; font-size: 13px; list-style-position: outside; }
+.turn-tree > details > summary, .child-branch > details > summary { display: flex; align-items: center; flex-wrap: wrap; gap: 9px; cursor: pointer; color: #354052; font-size: 13px; list-style-position: outside; }
 .turn-tree > details > summary { min-height: 62px; padding: 10px 14px; border: 1px solid #dce3ee; border-radius: 9px; background: #fff; box-shadow: 0 2px 8px rgba(28, 39, 57, .04); }
 .turn-tree > details > summary:hover { border-color: #b9c9e6; background: #fbfcff; }
 .turn-tree > details > summary strong { font-size: 15px; }
@@ -243,7 +302,7 @@ function attachmentUrl(assetId) {
 .metadata-list dd { min-width: 0; color: #354052; font-size: 12px; overflow-wrap: anywhere; }
 .breakable { word-break: break-all; }
 .message-branch { display: grid; gap: 9px; }
-.message-node, .process-node, .event-node { border: 1px solid #e1e5eb; background: #f8f9fb; }
+.message-node, .process-node { border: 1px solid #e1e5eb; background: #f8f9fb; }
 .message-node { padding: 12px 13px; }
 .message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 2px; }
 .message-images a { display: block; }
@@ -265,12 +324,19 @@ pre { max-height: 280px; overflow: auto; margin: 8px 0 0; padding: 10px 11px; bo
 .tool-summary { justify-content: space-between; }
 .tool-payload b { display: block; color: #687486; font-size: 11px; }
 .tool-payload pre { max-height: 180px; }
-.event-list { border-top: 1px solid #e1e5eb; padding-top: 8px; }
-.event-list > summary { margin-bottom: 8px; color: #596577; }
-.event-node, .process-node { padding: 9px 10px; }
+.process-node { padding: 9px 10px; }
 .event-heading span, .tool-summary span { overflow-wrap: anywhere; }
 .process-node { border-left: 3px solid #aeb8c9; }
-.process-node pre, .event-node pre { max-height: 220px; }
+.model-call-node { border-left-color: #4f7cff; }
+.model-request-row { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; padding: 9px 10px; border-left: 3px solid #8b98ab; background: #f6f7f9; color: #687486; font-size: 11px; }
+.model-request-row b { color: #273852; font-size: 12px; }
+.model-event-details { margin-top: 9px; color: #687486; font-size: 11px; }
+.model-event-details > summary { cursor: pointer; }
+.model-event-row { margin-top: 8px; }
+.model-event-row > span { font-weight: 650; }
+.process-node pre { max-height: 220px; }
+.token-usage { display: flex; flex-wrap: wrap; gap: 8px 18px; margin-top: 8px; padding: 9px 10px; border-left: 3px solid #4f7cff; background: #f1f5ff; color: #687486; font-size: 11px; }
+.token-usage b { color: #273852; font-size: 12px; }
 @media (max-width: 720px) {
   .detail-drawer { width: 100%; }
   .tree-detail { padding: 14px 14px 28px; }
