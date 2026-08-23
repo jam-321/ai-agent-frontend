@@ -297,6 +297,7 @@ function toolLabel(tool) {
                 <el-form-item label="上下文 Token 上限"><el-input-number v-model="form.runtime.budget.maxContextTokens" :min="1024" :max="options.budgetDefaults.maxContextTokens" /></el-form-item>
                 <el-form-item label="最大输出 Token"><el-input-number v-model="form.runtime.budget.maxOutputTokens" :min="128" :max="options.budgetDefaults.maxOutputTokens" /></el-form-item>
                 <el-form-item label="安全余量 Token"><el-input-number v-model="form.runtime.budget.safetyMarginTokens" :min="0" :max="options.budgetDefaults.safetyMarginTokens" /></el-form-item>
+                <el-form-item label="单次用户输入上限"><el-input-number v-model="form.runtime.budget.maxUserInputTokens" :min="1" :max="options.budgetDefaults.maxUserInputTokens" /></el-form-item>
               </div>
             </el-tab-pane>
             <el-tab-pane label="上下文压缩">
@@ -304,6 +305,7 @@ function toolLabel(tool) {
                 <el-form-item label="启用压缩"><div class="inline-switch"><el-switch v-model="form.runtime.memory.compactionEnabled" /><span>Turn 间摘要与 Tool Result 压缩</span></div></el-form-item>
                 <el-form-item label="压缩触发 Token"><el-input-number v-model="form.runtime.memory.compactionTriggerTokens" :min="1024" :max="options.memoryDefaults.compactionTriggerTokens" /></el-form-item>
                 <el-form-item label="保留最近 Token"><el-input-number v-model="form.runtime.memory.keepRecentTokens" :min="512" :max="options.memoryDefaults.keepRecentTokens" /></el-form-item>
+                <el-form-item label="每个 Turn 回填工具对"><el-input-number v-model="form.runtime.memory.maxToolPairsPerTurn" :min="0" :max="options.memoryDefaults.maxToolPairsPerTurn" /></el-form-item>
                 <el-form-item label="单 Tool Result 上限"><el-input-number v-model="form.runtime.memory.maxToolResultTokens" :min="256" :max="options.memoryDefaults.maxToolResultTokens" /></el-form-item>
                 <el-form-item label="压缩预览字符"><el-input-number v-model="form.runtime.memory.compactedToolPreviewChars" :min="100" :max="options.memoryDefaults.compactedToolPreviewChars" /></el-form-item>
               </div>
