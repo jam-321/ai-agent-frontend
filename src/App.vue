@@ -1,7 +1,6 @@
 <script setup>
-import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
-import AdminMonitor from './components/AdminMonitor.vue'
-import AdminConversations from './components/AdminConversations.vue'
+import { computed, defineAsyncComponent, onMounted, onUnmounted, ref, watch } from 'vue'
+import zhCn from 'element-plus/es/locale/lang/zh-cn'
 import AdminManagement from './components/AdminManagement.vue'
 import NavigationTree from './components/NavigationTree.vue'
 import { getCurrentUser, login, logout, register } from './api/auth'
@@ -10,6 +9,9 @@ import { deleteConversation, getConversationTurns, getProgress, listConversation
 import { listAgents } from './api/agents'
 import { listModels } from './api/models'
 import { useRoute, useRouter } from 'vue-router'
+
+const AdminMonitor = defineAsyncComponent(() => import('./components/AdminMonitor.vue'))
+const AdminConversations = defineAsyncComponent(() => import('./components/AdminConversations.vue'))
 
 const currentUser = ref(null)
 const route = useRoute()
@@ -66,6 +68,8 @@ onUnmounted(stopPolling)
 watch(() => route.name, syncRoute)
 
 function syncRoute() {
+  // 首次加载管理员深链接时先等待 /auth/me，避免把“尚未加载”误判为“非管理员”。
+  if (initializing.value && !currentUser.value) return
   if (route.meta.admin && !currentUser.value?.isAdmin) {
     router.replace('/chat')
     workspaceView.value = 'chat'
@@ -407,6 +411,7 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
 </script>
 
 <template>
+  <el-config-provider :locale="zhCn">
   <div v-if="initializing" class="loading-screen">正在检查登录状态...</div>
 
   <div v-else-if="!currentUser" class="auth-shell">
@@ -503,6 +508,7 @@ function nodeLabel(node) { return node.nodeStatus === 'START' ? '执行中' : no
       </footer>
     </section>
   </div>
+  </el-config-provider>
 </template>
 
 <style>
@@ -541,6 +547,15 @@ button, input { font: inherit; } button { cursor: pointer; }
 .footer-agent-select { flex: 0 0 auto; width: 110px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
  .footer-model-select { flex: 0 1 210px; width: 210px; padding: 9px 8px; border-color: #d1d5db; background: #fff; color: #4b5563; }
  .tree-nav { display: grid; gap: 8px; }.nav-group { border-top: 1px solid #344052; padding-top: 8px; }.nav-group-title, .nav-item { width: 100%; border: 0; color: #dbe3ef; background: transparent; text-align: left; }.nav-group-title { padding: 9px 8px; font-weight: 700; }.nav-group-title:hover, .nav-item:hover, .nav-item.active { background: #34445c; }.nav-children { display: grid; gap: 2px; padding: 2px 0 6px 20px; }.nav-item { padding: 8px 10px; color: #aeb9ca; font-size: 13px; border-radius: 4px; }.nav-item.active { color: #fff; }.tree-arrow { display: inline-block; width: 18px; color: #8ea8dc; }.session-layout { display: flex; flex: 1; min-height: 0; }.conversation-pane { width: 290px; flex: 0 0 290px; overflow-y: auto; border-right: 1px solid #e1e5eb; background: #f8f9fb; }.conversation-pane-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px; border-bottom: 1px solid #e1e5eb; }.conversation-pane-head .new-button { width: auto; padding: 7px 9px; color: #40598d; border-color: #cbd5eb; background: #fff; }.chat-panel { display: flex; flex: 1; min-width: 0; flex-direction: column; }.chat-panel .chat { min-height: 0; }.admin-page { flex: 1; min-width: 0; overflow: auto; padding: 24px; background: #f5f6f8; }.page-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 14px; margin-bottom: 18px; }.page-toolbar h2 { font-size: 20px; }.page-toolbar span { color: #7b8493; font-size: 13px; }.page-toolbar button, .admin-page table button { padding: 8px 12px; border: 1px solid #cbd2dc; border-radius: 6px; background: #fff; color: #3e4a5b; }.page-error { margin-bottom: 12px; color: #b42318; }.admin-table-wrap { overflow-x: auto; border: 1px solid #dde1e8; background: #fff; }.admin-page table { width: 100%; border-collapse: collapse; font-size: 13px; }.admin-page th, .admin-page td { padding: 11px 12px; border-bottom: 1px solid #e9ebef; text-align: left; white-space: nowrap; }.admin-page th { background: #f8f9fb; color: #626d7e; font-size: 12px; }.admin-page tbody tr:hover { background: #f6f8fc; }.admin-page td small { display: block; margin-top: 3px; color: #8791a0; }.empty-cell { padding: 36px !important; color: #8992a2; text-align: center !important; }.text-button { border: 0 !important; padding: 4px 7px !important; color: #315fbb !important; background: transparent !important; }.text-button.danger { color: #b42318 !important; }.pager { display: flex; justify-content: flex-end; align-items: center; gap: 12px; padding: 12px 0; color: #697386; font-size: 13px; }.drawer-backdrop, .modal-backdrop { position: fixed; inset: 0; z-index: 30; display: flex; justify-content: flex-end; background: rgba(24,31,43,.28); }.drawer { width: min(780px, 92vw); height: 100%; overflow-y: auto; background: #fff; box-shadow: -8px 0 24px rgba(15,23,42,.14); }.drawer > header, .edit-modal > header { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 18px 20px; border-bottom: 1px solid #e2e5ea; }.drawer header button, .edit-modal header button { border: 0; background: transparent; font-size: 24px; }.drawer header span { color: #7b8493; font-size: 12px; }.tree-detail { padding: 18px 20px; }.turn-tree { border-top: 1px solid #e4e8ee; padding: 12px 0; }.turn-tree summary, .tool-tree summary { cursor: pointer; font-weight: 600; color: #354052; }.turn-meta { display: grid; gap: 12px; padding: 12px 0 2px 18px; }.turn-meta b { color: #687486; font-size: 12px; }.turn-meta pre, .tool-tree pre { max-height: 240px; overflow: auto; margin-top: 6px; padding: 10px; background: #f7f8fa; color: #485465; font: 12px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }.tool-tree { display: grid; gap: 8px; border-left: 2px solid #b5c6ef; padding-left: 12px; }.modal-backdrop { align-items: center; justify-content: center; padding: 20px; }.edit-modal { width: min(640px, 96vw); max-height: 92vh; overflow-y: auto; background: #fff; box-shadow: 0 15px 40px rgba(15,23,42,.2); }.edit-modal label { display: grid; gap: 6px; padding: 9px 20px 0; color: #4d5867; font-size: 13px; }.edit-modal input, .edit-modal textarea { width: 100%; padding: 8px 9px; border: 1px solid #cdd4df; border-radius: 5px; font: inherit; }.edit-modal .primary-button { margin: 18px 20px; }
- @media (max-width: 720px) { .sidebar { width: 250px; flex-basis: 250px; }.conversation-pane { width: 230px; flex-basis: 230px; }.header { padding: 14px 16px; }.sub { display: none; }.chat, .footer { padding-left: 14px; padding-right: 14px; }.bubble { max-width: 88%; }.admin-page { padding: 16px; } }
+.app-shell { background: #f3f5f8; }
+.sidebar { width: 264px; flex-basis: 264px; border-right: 1px solid #dfe3e9; background: #fff; color: #354052; }
+.sidebar-head { padding: 22px 16px; border-bottom: 0; }
+.sidebar .brand-mark { margin: 0 9px 30px; color: #1f5fd0; font-size: 17px; letter-spacing: 0; }
+.header { min-height: 70px; padding: 14px 26px; border-bottom-color: #dfe3e9; }
+.header h1 { color: #202733; font-size: 19px; }
+.sub { display: block; margin-top: 3px; color: #8992a2; }
+.logout-button { border-color: #d8dde5; color: #566173; }
+.workspace { background: #f3f5f8; }
+ @media (max-width: 720px) { .sidebar { width: 230px; flex-basis: 230px; }.conversation-pane { width: 230px; flex-basis: 230px; }.header { padding: 14px 16px; }.sub { display: none; }.chat, .footer { padding-left: 14px; padding-right: 14px; }.bubble { max-width: 88%; }.admin-page { padding: 16px; } }
  @media (max-width: 560px) { .app-shell { flex-direction: column; }.sidebar { width: 100%; flex: 0 0 auto; max-height: 190px; }.sidebar-head { padding: 10px 14px; }.sidebar .brand-mark { margin-bottom: 8px; }.tree-nav { display: flex; gap: 8px; overflow-x: auto; }.nav-group { min-width: 190px; border-top: 0; padding: 0; }.nav-children { padding-left: 0; }.session-layout { flex-direction: column; }.conversation-pane { width: 100%; flex: 0 0 155px; border-right: 0; border-bottom: 1px solid #e1e5eb; }.conversation-pane .conversation-list { display: flex; gap: 6px; overflow-x: auto; padding: 7px 10px; }.conversation-pane .conversation-item { flex: 0 0 190px; margin: 0; }.footer { flex-wrap: wrap; }.footer-agent-select { flex: 0 0 105px; width: 105px; }.footer-model-select { flex: 0 0 calc(100% - 115px); width: auto; }.footer input { order: 3; flex: 1 1 calc(100% - 96px); }.footer button { order: 4; flex: 0 0 76px; } }
 </style>

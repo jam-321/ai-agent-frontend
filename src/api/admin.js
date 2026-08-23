@@ -33,6 +33,10 @@ export function listAdminAgents() {
   return request('/api/admin/agents')
 }
 
+export function getAdminConfigOptions() {
+  return request('/api/admin/config-options')
+}
+
 export function createAdminAgent(payload) {
   return request('/api/admin/agents', { method: 'POST', body: JSON.stringify(payload) })
 }
