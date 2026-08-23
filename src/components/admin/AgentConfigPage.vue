@@ -28,6 +28,10 @@ const selectedProvider = computed(() => providers.value.find(
   (provider) => provider.providerKey === form.value.modelProviderKey
 ))
 const availableModels = computed(() => selectedProvider.value?.models || [])
+const selectedFallbackProvider = computed(() => providers.value.find(
+  (provider) => provider.providerKey === form.value.fallbackModelProviderKey
+))
+const availableFallbackModels = computed(() => selectedFallbackProvider.value?.models || [])
 const configurablePlugins = computed(() => (options.value?.plugins || []).filter((plugin) => !plugin.system))
 const systemPlugins = computed(() => (options.value?.plugins || []).filter((plugin) => plugin.system))
 const jsonPreview = computed(() => prettyJson({
@@ -76,6 +80,8 @@ function emptyForm() {
     modelProviderKey: '',
     modelName: '',
     modelTemperature: 0.7,
+    fallbackModelProviderKey: '',
+    fallbackModelName: '',
     imageHistoryMode: 'SUMMARY_TOOL',
     systemPrompt: '',
     allTools: false,
@@ -107,6 +113,8 @@ function openEdit(row) {
     modelProviderKey: row.modelProviderKey,
     modelName: row.modelName,
     modelTemperature: row.modelTemperature ?? 0.7,
+    fallbackModelProviderKey: row.fallbackModelProviderKey || '',
+    fallbackModelName: row.fallbackModelName || '',
     imageHistoryMode: row.imageHistoryMode || 'SUMMARY_TOOL',
     systemPrompt: row.systemPrompt || '',
     allTools: row.enabledTools == null,
@@ -128,6 +136,10 @@ function changeExecutionType(type) {
 
 function changeProvider() {
   form.value.modelName = availableModels.value[0]?.modelName || ''
+}
+
+function changeFallbackProvider() {
+  form.value.fallbackModelName = availableFallbackModels.value[0]?.modelName || ''
 }
 
 async function save() {
@@ -154,7 +166,9 @@ async function save() {
     imageHistoryMode: form.value.imageHistoryMode,
     modelProviderKey: form.value.modelProviderKey,
     modelName: form.value.modelName,
-    modelTemperature: form.value.modelTemperature
+    modelTemperature: form.value.modelTemperature,
+    fallbackModelProviderKey: form.value.fallbackModelProviderKey || null,
+    fallbackModelName: form.value.fallbackModelName || null
   }
 
   saving.value = true
@@ -252,6 +266,16 @@ function toolLabel(tool) {
               <el-select v-model="form.modelName" filterable><el-option v-for="model in availableModels" :key="model.modelName" :label="model.displayName" :value="model.modelName" /></el-select>
             </el-form-item>
             <el-form-item label="Temperature"><el-input-number v-model="form.modelTemperature" :min="0" :max="2" :step="0.1" :precision="1" /></el-form-item>
+            <el-form-item label="降级模型供应商">
+              <el-select v-model="form.fallbackModelProviderKey" clearable filterable placeholder="主模型失败时不自动降级" @change="changeFallbackProvider">
+                <el-option v-for="provider in enabledProviders" :key="provider.providerKey" :label="provider.providerName" :value="provider.providerKey" />
+              </el-select>
+            </el-form-item>
+            <el-form-item label="降级模型">
+              <el-select v-model="form.fallbackModelName" clearable filterable :disabled="!form.fallbackModelProviderKey" placeholder="选择备用模型">
+                <el-option v-for="model in availableFallbackModels" :key="model.modelName" :label="model.displayName" :value="model.modelName" />
+              </el-select>
+            </el-form-item>
             <el-form-item label="图片历史模式">
               <el-select v-model="form.imageHistoryMode"><el-option v-for="mode in options?.imageHistoryModes || []" :key="mode" :label="mode === 'FULL_IMAGE_HISTORY' ? '完整图片历史' : '摘要工具回查'" :value="mode" /></el-select>
             </el-form-item>
